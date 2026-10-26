@@ -2562,7 +2562,8 @@ pub fn read_custom_client(config: &str) {
         log::error!("Failed to decode custom client config");
         return;
     };
-    const KEY: &str = "5Qbwsde3unUcJBtrx9ZkvUmwFNoExHzpryHuPUdqlWM=";
+    // Manashakti: custom.txt is signed with our own key (branding/manashakti/make_custom_txt.py).
+    const KEY: &str = "eIzQbYaiaC+b2bsQ/FqR+qaotMVqDDUezlS90aUE95w=";
     let Some(pk) = get_rs_pk(KEY) else {
         log::error!("Failed to parse public key of custom client");
         return;
