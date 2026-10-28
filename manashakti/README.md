@@ -46,3 +46,4 @@ These programs connect only to the server operated by Manashakti Research Centre
 administrator requested. They do not send data to any other networked system. The server stores
 the computer's support ID, name and, for permanent access, its access password; screen content is
 not recorded. Contact: see https://www.manashakti.org.
+Email : developers@manashakti.org
