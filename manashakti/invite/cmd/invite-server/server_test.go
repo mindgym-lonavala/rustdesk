@@ -132,7 +132,7 @@ func TestTechnicianPagesAreOfficeOnlyAndNeedLogin(t *testing.T) {
 		t.Fatalf("create without session: %d", w.Code)
 	}
 	// cross-site POST rejected
-	r := httptest.NewRequest("POST", "/invites/login", strings.NewReader("username=sukrut&password=right"))
+	r := httptest.NewRequest("POST", "/invites/login", strings.NewReader("username=tech1&password=right"))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	r.Header.Set("Origin", "https://evil.example")
 	r.RemoteAddr = "192.168.50.5:1"
