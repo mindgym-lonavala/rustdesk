@@ -1,0 +1,60 @@
+# Manashakti Support invite service and setup helper (Windows x64).
+# Source: manashakti/invite (MIT). Artifact: manashakti-invite-windows.
+name: Manashakti invite build
+
+on:
+  push:
+    branches: [master]
+    paths: ["manashakti/invite/**", ".github/workflows/manashakti-invite.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: manashakti/invite
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+      - name: Test
+        run: |
+          go vet ./...
+          go test ./...
+      - name: Embed Windows version info, manifest and icon
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          for c in invite-helper invite-server; do
+            (cd cmd/$c && go-winres make --in winres/winres.json --arch amd64)
+          done
+      - name: Build Windows executables
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p ../../out
+          go build -trimpath -ldflags "-s -w" -o ../../out/invite-server.exe ./cmd/invite-server
+          go build -trimpath -ldflags "-s -w -X main.baseURL=https://support.manashakti.org:8443" -o ../../out/invite-helper.exe ./cmd/invite-helper
+          cp deploy/install-invite-server.ps1 ../../out/
+          sha256sum ../../out/*
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: upload
+        with:
+          name: manashakti-invite-windows
+          path: out
+      # Code signing (SignPath Foundation), once the project is approved:
+      # - uses: signpath/github-action-submit-signing-request@v1
+      #   with:
+      #     api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+      #     organization-id: <from SignPath>
+      #     project-slug: manashakti-support
+      #     signing-policy-slug: release-signing
+      #     github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      #     wait-for-completion: true
+      #     output-artifact-directory: signed
