@@ -156,3 +156,45 @@ func (c *Client) UpsertPeer(ctx context.Context, token, guid string, p Peer) err
 	}
 	return c.do(ctx, http.MethodPost, "/api/ab/peer/add/"+url.PathEscape(guid), token, p, nil)
 }
+
+// OidcBegin starts a rustdesk-api OIDC sign-in for provider op (as configured in the web admin,
+// e.g. "Google"). The returned URL is opened by the user; code is polled with OidcQuery.
+func (c *Client) OidcBegin(ctx context.Context, op, id, uuid string) (code, authURL string, err error) {
+	var res struct {
+		Code string `json:"code"`
+		URL  string `json:"url"`
+	}
+	err = c.do(ctx, http.MethodPost, "/api/oidc/auth", "", map[string]any{
+		"op": op, "id": id, "uuid": uuid,
+		"deviceInfo": map[string]string{"name": "invite-server", "os": "web", "type": "browser"},
+	}, &res)
+	if err != nil {
+		return "", "", err
+	}
+	if res.Code == "" || res.URL == "" {
+		return "", "", errors.New("rustdesk-api returned no sign-in URL")
+	}
+	return res.Code, res.URL, nil
+}
+
+// ErrOidcPending means the user has not finished signing in yet.
+var ErrOidcPending = errors.New("sign-in not finished yet")
+
+// OidcQuery returns the access token and username once the user has signed in.
+func (c *Client) OidcQuery(ctx context.Context, code, id, uuid string) (token, name string, err error) {
+	var res struct {
+		AccessToken string `json:"access_token"`
+		Error       string `json:"error"`
+		User        struct {
+			Name string `json:"name"`
+		} `json:"user"`
+	}
+	q := "/api/oidc/auth-query?code=" + url.QueryEscape(code) + "&id=" + url.QueryEscape(id) + "&uuid=" + url.QueryEscape(uuid)
+	if err := c.do(ctx, http.MethodGet, q, "", nil, &res); err != nil {
+		return "", "", err
+	}
+	if res.AccessToken == "" {
+		return "", "", ErrOidcPending
+	}
+	return res.AccessToken, res.User.Name, nil
+}

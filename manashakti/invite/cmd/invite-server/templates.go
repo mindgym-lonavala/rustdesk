@@ -56,12 +56,29 @@ var techTmpl = template.Must(template.New("tech").Parse(`<!doctype html>
 <h1>Support invites</h1>
 {{if .Error}}<p class="err">{{.Error}}</p>{{end}}
 {{if not .User}}
+{{if .GoogleURL}}
+<div class="card"><h2>Continue with Google</h2>
+<p>Google sign-in opens in a new tab. Sign in there, then come back to this tab; it updates by itself.</p>
+<a class="btn" href="{{.GoogleURL}}" target="_blank" rel="noopener">Open Google sign-in</a>
+<p class="muted" id="status">Waiting for Google sign-in…</p>
+<script>
+(function poll(){fetch('/invites/google/poll',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(j){
+if(j.done){location.href='/invites';return}
+if(j.error){document.getElementById('status').textContent=j.error;return}
+setTimeout(poll,2000)}).catch(function(){setTimeout(poll,4000)})})();
+</script></div>
+{{else}}
 <div class="card"><h2>Sign in</h2>
+{{if .Google}}<form method="post" action="/invites/google"><button class="btn" type="submit">Continue with Google</button></form>{{end}}
+{{if .Office}}
+<p class="muted">{{if .Google}}Or, on the office network, with your password:{{else}}Use your Manashakti Support technician account.{{end}}</p>
 <form method="post" action="/invites/login">
 <label>Username</label><input type="text" name="username" autocomplete="username" required>
 <label>Password</label><input type="password" name="password" autocomplete="current-password" required>
-<button class="btn" type="submit">Sign in</button></form>
-<p class="muted">Use your Manashakti Support technician account.</p></div>
+<button class="btn{{if .Google}} secondary{{end}}" type="submit">Sign in with password</button></form>
+{{else}}<p class="muted">Password sign-in works only on the office network.{{if not .Google}} Google sign-in is not set up yet.{{end}}</p>{{end}}
+</div>
+{{end}}
 {{else}}
 <p class="muted">Signed in as {{.Name}} ({{.User}}).
 <form method="post" action="/invites/logout" style="display:inline"><button class="btn small secondary" type="submit">Sign out</button></form></p>

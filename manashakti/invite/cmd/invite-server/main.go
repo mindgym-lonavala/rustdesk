@@ -20,6 +20,7 @@ func main() {
 	public := flag.String("public-url", "https://support.manashakti.org:8443", "public base URL")
 	book := flag.String("book", "Manashakti PCs", "address book to add PCs to")
 	dir := flag.String("dir", ".", "base directory (data\\ and files\\ live here)")
+	googleOp := flag.String("google-op", "Google", "rustdesk-api OAuth provider name for Google sign-in (empty disables)")
 	flag.Parse()
 
 	st, err := store.Open(filepath.Join(*dir, "data", "invites.json"))
@@ -32,6 +33,7 @@ func main() {
 		PublicURL: strings.TrimRight(*public, "/"),
 		Book:      *book,
 		FilesDir:  filepath.Join(*dir, "files"),
+		GoogleOp:  *googleOp,
 	}
 	srv := &http.Server{
 		Addr:              *listen,

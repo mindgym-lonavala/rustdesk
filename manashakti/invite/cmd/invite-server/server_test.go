@@ -17,9 +17,31 @@ import (
 )
 
 type fakeAPI struct {
-	mu    sync.Mutex
-	peers map[string]rdapi.Peer
-	fail  error
+	mu         sync.Mutex
+	peers      map[string]rdapi.Peer
+	fail       error
+	oidcUser   string // set once the "Google" sign-in has completed
+	oidcCode   string
+	oidcIDUUID string
+}
+
+func (f *fakeAPI) OidcBegin(_ context.Context, op, id, uuid string) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.oidcCode, f.oidcIDUUID = "state123", id+"|"+uuid
+	return f.oidcCode, "https://accounts.google.com/o/oauth2/auth?state=state123", nil
+}
+
+func (f *fakeAPI) OidcQuery(_ context.Context, code, id, uuid string) (string, string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if code != f.oidcCode || id+"|"+uuid != f.oidcIDUUID {
+		return "", "", &rdapi.APIError{Status: 400, Message: "OauthExpired"}
+	}
+	if f.oidcUser == "" {
+		return "", "", rdapi.ErrOidcPending
+	}
+	return "tok-tech1", f.oidcUser, nil
 }
 
 func (f *fakeAPI) Login(_ context.Context, u, p string) (string, string, error) {
@@ -61,7 +83,7 @@ func newTestServer(t *testing.T) (*Server, *fakeAPI, http.Handler) {
 		os.WriteFile(filepath.Join(files, n), []byte("binary:"+n), 0o600)
 	}
 	api := &fakeAPI{peers: map[string]rdapi.Peer{}}
-	s := &Server{Store: st, API: api, PublicURL: public, Book: "Manashakti PCs", FilesDir: files}
+	s := &Server{Store: st, API: api, PublicURL: public, Book: "Manashakti PCs", FilesDir: files, GoogleOp: "Google"}
 	return s, api, s.Handler()
 }
 
@@ -119,8 +141,15 @@ func TestTechnicianPagesAreOfficeOnlyAndNeedLogin(t *testing.T) {
 	if rp := req(h, "GET", "/invites", "192.168.50.5", nil, nil, "").Header().Get("Referrer-Policy"); rp == "no-referrer" {
 		t.Fatal("no-referrer makes browsers send Origin: null on the sign-in form")
 	}
-	if w := req(h, "GET", "/invites", "203.0.113.9", nil, nil, ""); w.Code != http.StatusForbidden {
-		t.Fatalf("public IP got %d", w.Code)
+	pub := req(h, "GET", "/invites", "203.0.113.9", nil, nil, "")
+	if pub.Code != 200 || strings.Contains(pub.Body.String(), `action="/invites/login"`) || !strings.Contains(pub.Body.String(), "Continue with Google") {
+		t.Fatalf("public page should offer Google only: %d", pub.Code)
+	}
+	if w := req(h, "POST", "/invites/login", "203.0.113.9", url.Values{"username": {"tech1"}, "password": {"right"}}, nil, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("password sign-in from outside the office got %d", w.Code)
+	}
+	if w := req(h, "POST", "/invites/create", "203.0.113.9", url.Values{"name": {"X"}}, nil, ""); w.Code != http.StatusSeeOther {
+		t.Fatalf("create without session from outside: %d", w.Code)
 	}
 	w := req(h, "POST", "/invites/login", "192.168.50.5", url.Values{"username": {"tech1"}, "password": {"wrong"}}, nil, "")
 	if !strings.Contains(w.Body.String(), "Sign-in failed") {
@@ -233,4 +262,62 @@ func TestInvalidAndRevokedTokens(t *testing.T) {
 	if w := req(h, "GET", "/i/"+token, "198.51.100.7", nil, nil, ""); w.Code != http.StatusGone {
 		t.Fatalf("revoked invite: %d", w.Code)
 	}
+}
+
+func TestGoogleSignInFromOutsideTheOffice(t *testing.T) {
+	_, api, h := newTestServer(t)
+	const ip = "203.0.113.9"
+	start := req(h, "POST", "/invites/google", ip, url.Values{}, nil, "")
+	if !strings.Contains(start.Body.String(), "https://accounts.google.com/o/oauth2/auth?state=state123") {
+		t.Fatalf("no Google link: %d %s", start.Code, start.Body)
+	}
+	var pending *http.Cookie
+	for _, c := range start.Result().Cookies() {
+		if c.Name == pendingCookie {
+			pending = c
+		}
+	}
+	if pending == nil {
+		t.Fatal("no pending sign-in cookie")
+	}
+	if w := req(h, "GET", "/invites/google/poll", ip, nil, pending, ""); !strings.Contains(w.Body.String(), `"done":false`) {
+		t.Fatalf("poll before sign-in: %s", w.Body)
+	}
+	if w := req(h, "GET", "/invites/google/poll", ip, nil, nil, ""); !strings.Contains(w.Body.String(), "expired") {
+		t.Fatalf("poll without cookie: %s", w.Body)
+	}
+
+	api.mu.Lock()
+	api.oidcUser = "tech1"
+	api.mu.Unlock()
+	done := req(h, "GET", "/invites/google/poll", ip, nil, pending, "")
+	if !strings.Contains(done.Body.String(), `"done":true`) {
+		t.Fatalf("poll after sign-in: %s", done.Body)
+	}
+	var session *http.Cookie
+	for _, c := range done.Result().Cookies() {
+		if c.Name == sessionCookie && c.Value != "" {
+			session = c
+		}
+	}
+	if session == nil {
+		t.Fatal("no session after Google sign-in")
+	}
+	token := createInviteFrom(t, h, session, ip, "Home PC")
+	if w := req(h, "GET", "/i/"+token, "198.51.100.7", nil, nil, ""); w.Code != 200 {
+		t.Fatalf("invite created via Google does not open: %d", w.Code)
+	}
+	if w := req(h, "GET", "/invites/google/poll", ip, nil, pending, ""); !strings.Contains(w.Body.String(), "expired") {
+		t.Fatal("pending sign-in reusable after completion")
+	}
+}
+
+func createInviteFrom(t *testing.T, h http.Handler, c *http.Cookie, ip, name string) string {
+	t.Helper()
+	w := req(h, "POST", "/invites/create", ip, url.Values{"name": {name}}, c, "")
+	m := regexp.MustCompile(regexp.QuoteMeta(public) + `/i/([A-Za-z0-9_-]{43})`).FindStringSubmatch(w.Body.String())
+	if m == nil {
+		t.Fatalf("no link: %d %s", w.Code, w.Body)
+	}
+	return m[1]
 }

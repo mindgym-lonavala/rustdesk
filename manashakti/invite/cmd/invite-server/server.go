@@ -47,6 +47,8 @@ type API interface {
 	Login(ctx context.Context, username, password string) (string, string, error)
 	BookGUID(ctx context.Context, token, name string) (string, error)
 	UpsertPeer(ctx context.Context, token, guid string, p rdapi.Peer) error
+	OidcBegin(ctx context.Context, op, id, uuid string) (string, string, error)
+	OidcQuery(ctx context.Context, code, id, uuid string) (string, string, error)
 }
 
 type session struct {
@@ -60,12 +62,26 @@ type Server struct {
 	PublicURL string // https://support.manashakti.org:8443
 	Book      string // address book name
 	FilesDir  string
+	// GoogleOp is the rustdesk-api OAuth provider name for "Continue with Google";
+	// empty disables it. Password sign-in is always office-only.
+	GoogleOp string
 
 	mu       sync.Mutex
 	sessions map[string]session
+	pending  map[string]pendingSignIn
 	hits     map[string][]time.Time
 	hashes   map[string]fileHash
 }
+
+type pendingSignIn struct {
+	code, id, uuid, url string
+	expires             time.Time
+}
+
+const (
+	pendingCookie = "ms_invite_signin"
+	pendingTTL    = 5 * time.Minute
+)
 
 type fileHash struct {
 	mod  time.Time
@@ -75,15 +91,20 @@ type fileHash struct {
 
 func (s *Server) Handler() http.Handler {
 	s.sessions = map[string]session{}
+	s.pending = map[string]pendingSignIn{}
 	s.hits = map[string][]time.Time{}
 	s.hashes = map[string]fileHash{}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /invites", s.officeOnly(s.techPage))
-	mux.HandleFunc("POST /invites/login", s.officeOnly(s.sameOrigin(s.techLogin)))
-	mux.HandleFunc("POST /invites/logout", s.officeOnly(s.sameOrigin(s.techLogout)))
-	mux.HandleFunc("POST /invites/create", s.officeOnly(s.sameOrigin(s.techCreate)))
-	mux.HandleFunc("POST /invites/revoke", s.officeOnly(s.sameOrigin(s.techRevoke)))
+	// The page and session actions work from anywhere; a session comes either from a
+	// password (office network only) or from Google sign-in via rustdesk-api.
+	mux.HandleFunc("GET /invites", s.limited(60, s.techPage))
+	mux.HandleFunc("POST /invites/login", s.officeOnly(s.sameOrigin(s.limited(10, s.techLogin))))
+	mux.HandleFunc("POST /invites/google", s.sameOrigin(s.limited(10, s.googleBegin)))
+	mux.HandleFunc("GET /invites/google/poll", s.limited(60, s.googlePoll))
+	mux.HandleFunc("POST /invites/logout", s.sameOrigin(s.techLogout))
+	mux.HandleFunc("POST /invites/create", s.sameOrigin(s.techCreate))
+	mux.HandleFunc("POST /invites/revoke", s.sameOrigin(s.techRevoke))
 
 	mux.HandleFunc("GET /i/{token}", s.limited(30, s.landing))
 	mux.HandleFunc("GET /i/{token}/helper/{mode}", s.limited(10, s.helperDownload))
@@ -103,7 +124,7 @@ func securityHeaders(h http.Handler) http.Handler {
 		// POSTs, which sameOrigin would reject. Invite URLs still never leak cross-site.
 		w.Header().Set("Referrer-Policy", "same-origin")
 		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src 'self'; form-action 'self'")
 		h.ServeHTTP(w, r)
 	})
 }
@@ -123,10 +144,14 @@ func clientIP(r *http.Request) net.IP {
 	return ip
 }
 
+func inOffice(r *http.Request) bool {
+	ip := clientIP(r)
+	return ip != nil && (ip.IsPrivate() || ip.IsLoopback())
+}
+
 func (s *Server) officeOnly(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		if ip == nil || !(ip.IsPrivate() || ip.IsLoopback()) {
+		if !inOffice(r) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -205,6 +230,8 @@ func (s *Server) currentSession(r *http.Request) (session, bool) {
 
 type techView struct {
 	User, Name, Error, NewLink, NewName string
+	Office, Google                      bool
+	GoogleURL                           string
 	Book                                string
 	Invites                             []inviteRow
 }
@@ -221,6 +248,7 @@ func (s *Server) techPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) renderTech(w http.ResponseWriter, r *http.Request, v techView) {
 	se, ok := s.currentSession(r)
 	v.Book = s.Book
+	v.Office, v.Google = inOffice(r), s.GoogleOp != ""
 	if ok {
 		v.User, v.Name = se.user, se.name
 		now := time.Now()
@@ -593,4 +621,80 @@ func (s *Server) writePeer(ctx context.Context, apiToken string, p rdapi.Peer) e
 		return err
 	}
 	return s.API.UpsertPeer(ctx, apiToken, guid, p)
+}
+
+// ---- Google sign-in (through rustdesk-api OIDC) --------------------------------------------
+
+// googleBegin starts a sign-in and shows a page that opens Google in a new tab and polls
+// until rustdesk-api reports the result. Only Google accounts bound to a rustdesk-api user
+// (auto-register off) can complete it.
+func (s *Server) googleBegin(w http.ResponseWriter, r *http.Request) {
+	if s.GoogleOp == "" {
+		http.NotFound(w, r)
+		return
+	}
+	id, uuid := randomID()[:16], randomID()
+	code, authURL, err := s.API.OidcBegin(r.Context(), s.GoogleOp, id, uuid)
+	if err != nil {
+		log.Printf("google sign-in start: %v", err)
+		s.renderTech(w, r, techView{Error: "Google sign-in is not available right now."})
+		return
+	}
+	if u, perr := url.Parse(authURL); perr != nil || u.Scheme != "https" {
+		log.Printf("google sign-in start: unexpected URL %q", authURL)
+		s.renderTech(w, r, techView{Error: "Google sign-in is not available right now."})
+		return
+	}
+	pid := randomID()
+	s.mu.Lock()
+	for k, p := range s.pending {
+		if time.Now().After(p.expires) {
+			delete(s.pending, k)
+		}
+	}
+	s.pending[pid] = pendingSignIn{code: code, id: id, uuid: uuid, url: authURL, expires: time.Now().Add(pendingTTL)}
+	s.mu.Unlock()
+	http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: pid, Path: "/invites", HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode, MaxAge: int(pendingTTL.Seconds())})
+	s.renderTech(w, r, techView{GoogleURL: authURL})
+}
+
+func (s *Server) googlePoll(w http.ResponseWriter, r *http.Request) {
+	c, err := r.Cookie(pendingCookie)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": "Sign-in expired. Start again."})
+		return
+	}
+	s.mu.Lock()
+	p, ok := s.pending[c.Value]
+	s.mu.Unlock()
+	if !ok || time.Now().After(p.expires) {
+		writeJSON(w, http.StatusOK, map[string]any{"error": "Sign-in expired. Start again."})
+		return
+	}
+	token, user, err := s.API.OidcQuery(r.Context(), p.code, p.id, p.uuid)
+	if errors.Is(err, rdapi.ErrOidcPending) {
+		writeJSON(w, http.StatusOK, map[string]any{"done": false})
+		return
+	}
+	if err != nil || user == "" {
+		log.Printf("google sign-in result: %v", err)
+		s.mu.Lock()
+		delete(s.pending, c.Value)
+		s.mu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"error": "Google sign-in failed. Is this Google account linked to your technician account?"})
+		return
+	}
+	if _, err := s.API.BookGUID(r.Context(), token, s.Book); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"error": fmt.Sprintf("Signed in, but: %v.", err)})
+		return
+	}
+	sid := randomID()
+	s.mu.Lock()
+	delete(s.pending, c.Value)
+	s.sessions[sid] = session{user: user, name: user, apiToken: token, expires: time.Now().Add(sessionTTL)}
+	s.mu.Unlock()
+	log.Printf("google sign-in: %s from %s", user, clientIP(r))
+	http.SetCookie(w, &http.Cookie{Name: pendingCookie, Value: "", Path: "/invites", MaxAge: -1, HttpOnly: true, Secure: true, SameSite: http.SameSiteLaxMode})
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: sid, Path: "/invites", HttpOnly: true, Secure: true, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL.Seconds())})
+	writeJSON(w, http.StatusOK, map[string]any{"done": true})
 }

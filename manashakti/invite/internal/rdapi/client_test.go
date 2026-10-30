@@ -101,3 +101,45 @@ func TestUpsertAddsOrUpdates(t *testing.T) {
 		}
 	}
 }
+
+func TestOidcBeginAndQuery(t *testing.T) {
+	authed := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/oidc/auth":
+			var f map[string]any
+			json.NewDecoder(r.Body).Decode(&f)
+			if f["op"] != "Google" {
+				t.Errorf("op %v", f["op"])
+			}
+			w.Write([]byte(`{"code":"st","url":"https://accounts.google.com/x"}`))
+		case "/api/oidc/auth-query":
+			if r.URL.Query().Get("code") != "st" {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":"OauthExpired"}`))
+				return
+			}
+			if !authed { // rustdesk-api v2.7 answers 200 while the user is still signing in
+				w.Write([]byte(`{"message":"Authorization in progress, please login and bind","error":"No authed oidc is found"}`))
+				return
+			}
+			w.Write([]byte(`{"access_token":"tok","type":"access_token","user":{"name":"tech1"}}`))
+		}
+	}))
+	defer srv.Close()
+	c, ctx := New(srv.URL), context.Background()
+	code, u, err := c.OidcBegin(ctx, "Google", "id", "uuid")
+	if err != nil || code != "st" || u != "https://accounts.google.com/x" {
+		t.Fatalf("begin: %q %q %v", code, u, err)
+	}
+	if _, _, err := c.OidcQuery(ctx, "st", "id", "uuid"); !errors.Is(err, ErrOidcPending) {
+		t.Fatalf("want pending, got %v", err)
+	}
+	authed = true
+	if tok, name, err := c.OidcQuery(ctx, "st", "id", "uuid"); err != nil || tok != "tok" || name != "tech1" {
+		t.Fatalf("query: %q %q %v", tok, name, err)
+	}
+	if _, _, err := c.OidcQuery(ctx, "other", "id", "uuid"); err == nil || errors.Is(err, ErrOidcPending) {
+		t.Fatalf("expired code: %v", err)
+	}
+}

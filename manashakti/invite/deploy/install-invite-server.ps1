@@ -50,17 +50,34 @@ if (-not $svc) {
 Start-Service invite-server
 
 # --- Caddy routes -----------------------------------------------------------------------
+# /invites is reachable from anywhere: the service itself allows password sign-in only from
+# the office network, and Google sign-in (via rustdesk-api) from anywhere.
+function Update-Caddyfile([string]$newConf) {
+    $bak = "$caddyfile.bak-$(Get-Date -Format yyyyMMdd-HHmmss)"
+    Copy-Item $caddyfile $bak
+    $newConf | Set-Content -Encoding UTF8 $caddyfile
+    # Caddy logs to stderr; under "Stop", Windows PowerShell would turn that into a terminating error.
+    $ErrorActionPreference = "Continue"
+    $out = & $caddy validate --config $caddyfile --adapter caddyfile 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    ($out.Trim() -split "`n")[-1]
+    if ($code -ne 0) {
+        Copy-Item $bak $caddyfile -Force
+        throw "Caddyfile validation failed; the previous version was restored."
+    }
+    Restart-Service caddy
+}
+
 $marker = "# Invite service"
 $conf = Get-Content $caddyfile -Raw
+$oldOfficeOnly = '@invites path /invites /invites/\*\r?\n\s*handle @invites \{\r?\n\s*@outside not remote_ip private_ranges\r?\n\s*respond @outside "Forbidden" 403\r?\n\s*reverse_proxy 127\.0\.0\.1:21120\r?\n\s*\}'
 if ($conf -notmatch [regex]::Escape($marker)) {
     $anchor = "	# Web admin and its API: office network only."
     if ($conf -notmatch [regex]::Escape($anchor)) { throw "Caddyfile layout not recognised; add the invite routes by hand (see docs/invites.md)." }
     $routes = @"
 	$marker
-	@invites path /invites /invites/*
-	handle @invites {
-		@outside not remote_ip private_ranges
-		respond @outside "Forbidden" 403
+	handle /invites* {
 		reverse_proxy 127.0.0.1:21120
 	}
 	handle /i/* {
@@ -71,23 +88,17 @@ if ($conf -notmatch [regex]::Escape($marker)) {
 	}
 
 "@
-    Copy-Item $caddyfile "$caddyfile.bak-$(Get-Date -Format yyyyMMdd-HHmm)"
-    $conf.Replace($anchor, $routes + $anchor) | Set-Content -Encoding UTF8 $caddyfile
-    # Caddy logs to stderr; under "Stop", Windows PowerShell would turn that into a terminating error.
-    $ErrorActionPreference = "Continue"
-    $out = & $caddy validate --config $caddyfile --adapter caddyfile 2>&1 | Out-String
-    $code = $LASTEXITCODE
-    $ErrorActionPreference = "Stop"
-    ($out.Trim() -split "`n")[-1]
-    if ($code -ne 0) { throw "Caddyfile validation failed; the previous version is in $caddyfile.bak-*" }
-    Restart-Service caddy
+    Update-Caddyfile ($conf.Replace($anchor, $routes + $anchor))
+} elseif ($conf -match $oldOfficeOnly) {
+    Write-Host "Opening /invites to Google sign-in from outside the office"
+    Update-Caddyfile ([regex]::Replace($conf, $oldOfficeOnly, "handle /invites* {`n`t`treverse_proxy 127.0.0.1:21120`n`t}"))
 }
 
 Start-Sleep 3
 Get-Service rustdesk-api, caddy, invite-server | Format-Table Name, Status, StartType
 try {
     $r = Invoke-WebRequest "https://${Domain}:$HttpsPort/invites" -UseBasicParsing -TimeoutSec 15
-    Write-Host "Invite page OK ($($r.StatusCode)): https://${Domain}:$HttpsPort/invites (office network only)" -ForegroundColor Green
+    Write-Host "Invite page OK ($($r.StatusCode)): https://${Domain}:$HttpsPort/invites (Google sign-in anywhere; password sign-in in the office)" -ForegroundColor Green
 } catch {
     Write-Host "Invite page not answering: $($_.Exception.Message)" -ForegroundColor Yellow
     Get-Content "$Dir\logs\invite-server.log" -Tail 10 -ErrorAction SilentlyContinue
