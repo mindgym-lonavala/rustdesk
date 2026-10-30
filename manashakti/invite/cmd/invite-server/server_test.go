@@ -321,3 +321,11 @@ func createInviteFrom(t *testing.T, h http.Handler, c *http.Cookie, ip, name str
 	}
 	return m[1]
 }
+
+func TestTrailingSlashRedirects(t *testing.T) {
+	_, _, h := newTestServer(t)
+	w := req(h, "GET", "/invites/", "203.0.113.9", nil, nil, "")
+	if w.Code != http.StatusMovedPermanently || w.Header().Get("Location") != "/invites" {
+		t.Fatalf("got %d %q", w.Code, w.Header().Get("Location"))
+	}
+}

@@ -99,6 +99,9 @@ func (s *Server) Handler() http.Handler {
 	// The page and session actions work from anywhere; a session comes either from a
 	// password (office network only) or from Google sign-in via rustdesk-api.
 	mux.HandleFunc("GET /invites", s.limited(60, s.techPage))
+	mux.HandleFunc("GET /invites/{$}", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/invites", http.StatusMovedPermanently)
+	})
 	mux.HandleFunc("POST /invites/login", s.officeOnly(s.sameOrigin(s.limited(10, s.techLogin))))
 	mux.HandleFunc("POST /invites/google", s.sameOrigin(s.limited(10, s.googleBegin)))
 	mux.HandleFunc("GET /invites/google/poll", s.limited(60, s.googlePoll))
