@@ -24,7 +24,8 @@ step() { echo "  - $*..."; }
 [[ $EUID -eq 0 ]] || die "run with sudo: sudo bash $0 '<invite link>'"
 [[ $(uname -m) == x86_64 ]] || die "only x86_64 is supported"
 [[ $# -eq 1 ]] || die "usage: sudo bash $0 '<invite link>'"
-[[ $1 =~ ^${API//./\\.}/i/([A-Za-z0-9_-]{43})$ ]] || die "that is not a Manashakti Support invite link"
+LINK="${1//[[:space:]]/}"   # tolerate a line break or spaces pasted with the link
+[[ $LINK =~ ^${API//./\\.}/i/([A-Za-z0-9_-]{43})$ ]] || die "that is not a Manashakti Support invite link"
 TOKEN="${BASH_REMATCH[1]}"
 command -v curl >/dev/null || die "curl is required (apt-get install curl)"
 
@@ -50,7 +51,13 @@ else
     echo "$sum  $tmp/$pkg" | sha256sum -c --quiet - || die "download checksum mismatch"
     step "Installing"
     if [[ $pkg == *.deb ]]; then
-        DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp/$pkg" >/dev/null
+        if [[ -n $(dpkg --audit 2>/dev/null) ]]; then
+            die "an earlier software installation on this PC was interrupted. Run:
+    sudo dpkg --configure -a && sudo apt-get -f install -y
+then run this script again with the same invite link."
+        fi
+        DEBIAN_FRONTEND=noninteractive apt-get install -y "$tmp/$pkg" >/dev/null \
+            || die "apt-get could not install RustDesk (see the message above); fix that and run this script again with the same invite link"
     else
         dnf install -y "$tmp/$pkg" >/dev/null
     fi
