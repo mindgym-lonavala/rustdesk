@@ -20,7 +20,7 @@ func main() {
 	public := flag.String("public-url", "https://support.manashakti.org:8443", "public base URL")
 	book := flag.String("book", "Manashakti PCs", "address book to add PCs to")
 	dir := flag.String("dir", ".", "base directory (data\\ and files\\ live here)")
-	googleOp := flag.String("google-op", "Google", "rustdesk-api OAuth provider name for Google sign-in (empty disables)")
+	googleOp := flag.String("google-op", "google", "rustdesk-api OAuth provider name (the IdP column in the web admin, case-sensitive); empty disables")
 	flag.Parse()
 
 	st, err := store.Open(filepath.Join(*dir, "data", "invites.json"))
