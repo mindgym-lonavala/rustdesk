@@ -19,6 +19,7 @@ DEB_SHA256="11e0af5f25e591358fa5190db96a808e14289dbe32b66e5cca8e230e28e8d479"
 RPM_SHA256="ec7c79e5020911b05b66a57219132aab62a894797ddd39619cb9bb3b61fb11ba"
 
 die() { echo "Error: $*" >&2; exit 1; }
+trap 'echo "Error: setup stopped unexpectedly at line $LINENO of $0" >&2' ERR
 step() { echo "  - $*..."; }
 
 [[ $EUID -eq 0 ]] || die "run with sudo: sudo bash $0 '<invite link>'"
@@ -76,7 +77,12 @@ rustdesk --option verification-method use-both-passwords >/dev/null
 [[ $(rustdesk --option custom-rendezvous-server 2>/dev/null | tail -n1) == "$SERVER" ]] || die "settings were not applied (is rustdesk.service running?)"
 
 step "Setting a random permanent password"
-PW=$(LC_ALL=C tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789' </dev/urandom | head -c 24)
+# Read a finite chunk at a time: "tr </dev/urandom | head" gets SIGPIPE, which pipefail turns into an exit.
+PW=""
+while [[ ${#PW} -lt 24 ]]; do
+    PW+=$(head -c 64 /dev/urandom | LC_ALL=C tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789')
+done
+PW=${PW:0:24}
 out=$(rustdesk --password "$PW" 2>&1 || true)
 [[ $out == *"Done!"* ]] || die "could not set the password: $out"
 
