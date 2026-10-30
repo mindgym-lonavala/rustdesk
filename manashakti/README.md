@@ -11,6 +11,7 @@ Everything here is open source:
 |---|---|---|---|
 | Branded Windows client (RustDesk fork) | repository root, `branding/manashakti/` | AGPL-3.0 | `ManashaktiSupport-<version>-x86_64.exe` (portable), `.msi` (installer) |
 | Invite service and setup helper | [`manashakti/invite/`](invite/) | MIT | `invite-server.exe`, `invite-helper.exe` |
+| Linux setup script | [`manashakti/linux/install-linux.sh`](linux/install-linux.sh) | MIT | configures the official RustDesk package via an invite link |
 
 Builds run only on GitHub Actions from this repository
 ([`manashakti-windows.yml`](../.github/workflows/manashakti-windows.yml),

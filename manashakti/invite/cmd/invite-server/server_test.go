@@ -329,3 +329,16 @@ func TestTrailingSlashRedirects(t *testing.T) {
 		t.Fatalf("got %d %q", w.Code, w.Header().Get("Location"))
 	}
 }
+
+func TestEnrollLinuxPlatform(t *testing.T) {
+	_, api, h := newTestServer(t)
+	c := login(t, h)
+	token := createInvite(t, h, c, "Lab Linux", true)
+	body := `{"mode":"setup","id":"123456780","password":"Abcdefghijkmnpqrstuvwx23","hostname":"lab1","platform":"Linux"}`
+	if w := req(h, "POST", "/api/invite/"+token+"/enroll", "198.51.100.7", nil, nil, body); w.Code != 200 {
+		t.Fatalf("%d %s", w.Code, w.Body)
+	}
+	if p := api.peers["123456780"]; p.Platform != "Linux" {
+		t.Fatalf("platform %q", p.Platform)
+	}
+}

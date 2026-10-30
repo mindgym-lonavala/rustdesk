@@ -531,6 +531,7 @@ type enrollRequest struct {
 	Password string `json:"password"`
 	Hostname string `json:"hostname"`
 	Username string `json:"username"`
+	Platform string `json:"platform"` // Windows (default), Linux, Mac OS
 }
 
 func cleanLabel(s string) string {
@@ -562,7 +563,12 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	host, user := cleanLabel(req.Hostname), cleanLabel(req.Username)
 
-	peer := rdapi.Peer{ID: req.ID, Hostname: host, Username: user, Platform: "Windows"}
+	platform := "Windows"
+	switch req.Platform {
+	case "Linux", "Mac OS":
+		platform = req.Platform
+	}
+	peer := rdapi.Peer{ID: req.ID, Hostname: host, Username: user, Platform: platform}
 	switch req.Mode {
 	case "help":
 		peer.Alias = "Invite: " + inv.Name
