@@ -20,6 +20,7 @@ func main() {
 	public := flag.String("public-url", "https://support.manashakti.org:8443", "public base URL")
 	book := flag.String("book", "Manashakti PCs", "address book to add PCs to")
 	dir := flag.String("dir", ".", "base directory (data\\ and files\\ live here)")
+	setupUsers := flag.String("setup-users", "", "comma-separated technician usernames allowed to offer unattended access; empty = all")
 	googleOp := flag.String("google-op", "google", "rustdesk-api OAuth provider name (the IdP column in the web admin, case-sensitive); empty disables")
 	flag.Parse()
 
@@ -34,6 +35,14 @@ func main() {
 		Book:      *book,
 		FilesDir:  filepath.Join(*dir, "files"),
 		GoogleOp:  *googleOp,
+	}
+	for _, u := range strings.Split(*setupUsers, ",") {
+		if u = strings.TrimSpace(u); u != "" {
+			if s.SetupUsers == nil {
+				s.SetupUsers = map[string]bool{}
+			}
+			s.SetupUsers[u] = true
+		}
 	}
 	srv := &http.Server{
 		Addr:              *listen,

@@ -342,3 +342,30 @@ func TestEnrollLinuxPlatform(t *testing.T) {
 		t.Fatalf("platform %q", p.Platform)
 	}
 }
+
+func TestHelpOnlyTechnician(t *testing.T) {
+	s, api, h := newTestServer(t)
+	s.SetupUsers = map[string]bool{"boss": true} // tech1 is not allowed to offer unattended access
+	c := login(t, h)
+	page := req(h, "GET", "/invites", "192.168.50.5", nil, c, "")
+	if strings.Contains(page.Body.String(), `name="allow_setup"`) || !strings.Contains(page.Body.String(), "one-time help invites only") {
+		t.Fatal("setup option shown to a help-only technician")
+	}
+	token := createInvite(t, h, c, "Visitor PC", true) // allow_setup=on is posted anyway
+	if land := req(h, "GET", "/i/"+token, "198.51.100.7", nil, nil, ""); strings.Contains(land.Body.String(), "/helper/setup") {
+		t.Fatal("landing page offers permanent access")
+	}
+	if w := req(h, "GET", "/i/"+token+"/helper/setup", "198.51.100.7", nil, nil, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("setup helper served: %d", w.Code)
+	}
+	body := `{"mode":"setup","id":"222333444","password":"Abcdefghijkmnpqrstuvwx23"}`
+	if w := req(h, "POST", "/api/invite/"+token+"/enroll", "198.51.100.7", nil, nil, body); w.Code != http.StatusForbidden {
+		t.Fatalf("setup enrol accepted: %d %s", w.Code, w.Body)
+	}
+	if w := req(h, "POST", "/api/invite/"+token+"/enroll", "198.51.100.7", nil, nil, `{"mode":"help","id":"222333444"}`); w.Code != 200 {
+		t.Fatalf("help enrol: %d %s", w.Code, w.Body)
+	}
+	if p := api.peers["222333444"]; p.Password != "" || p.Alias != "Invite: Visitor PC" {
+		t.Fatalf("peer %+v", p)
+	}
+}

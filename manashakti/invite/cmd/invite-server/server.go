@@ -65,6 +65,9 @@ type Server struct {
 	// GoogleOp is the rustdesk-api OAuth provider name for "Continue with Google";
 	// empty disables it. Password sign-in is always office-only.
 	GoogleOp string
+	// SetupUsers lists the technicians allowed to offer "allow help any time" (unattended
+	// access). Empty means every technician may. Others can create one-time help invites only.
+	SetupUsers map[string]bool
 
 	mu       sync.Mutex
 	sessions map[string]session
@@ -233,6 +236,7 @@ func (s *Server) currentSession(r *http.Request) (session, bool) {
 
 type techView struct {
 	User, Name, Error, NewLink, NewName string
+	CanSetup                            bool
 	Office, Google                      bool
 	GoogleURL                           string
 	Book                                string
@@ -254,6 +258,7 @@ func (s *Server) renderTech(w http.ResponseWriter, r *http.Request, v techView) 
 	v.Office, v.Google = inOffice(r), s.GoogleOp != ""
 	if ok {
 		v.User, v.Name = se.user, se.name
+		v.CanSetup = s.canSetup(se.user)
 		now := time.Now()
 		for _, inv := range s.Store.ListBy(se.user) {
 			row := inviteRow{Key: inv.Key, Name: inv.Name, AllowSetup: inv.AllowSetup, Expires: inv.ExpiresAt.Local().Format("02 Jan 15:04")}
@@ -348,7 +353,7 @@ func (s *Server) techCreate(w http.ResponseWriter, r *http.Request) {
 		s.renderTech(w, r, techView{Error: err.Error()})
 		return
 	}
-	allowSetup := r.FormValue("allow_setup") == "on"
+	allowSetup := r.FormValue("allow_setup") == "on" && s.canSetup(se.user)
 	token, _, err := s.Store.Create(name, se.user, se.apiToken, allowSetup, tags, inviteTTL)
 	if err != nil {
 		log.Printf("create invite: %v", err)
@@ -574,7 +579,7 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 		peer.Alias = "Invite: " + inv.Name
 		peer.Tags = []string{inviteTag}
 	case "setup":
-		if !inv.AllowSetup {
+		if !inv.AllowSetup || !s.canSetup(inv.CreatedBy) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "permanent access not offered by this invite"})
 			return
 		}
@@ -622,6 +627,10 @@ func (s *Server) enroll(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("enrolled %s mode=%s id=%s host=%q invite=%q by=%s", clientIP(r), req.Mode, req.ID, host, inv.Name, inv.CreatedBy)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) canSetup(user string) bool {
+	return len(s.SetupUsers) == 0 || s.SetupUsers[user]
 }
 
 func (s *Server) writePeer(ctx context.Context, apiToken string, p rdapi.Peer) error {

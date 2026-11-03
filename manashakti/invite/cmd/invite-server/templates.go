@@ -93,7 +93,8 @@ setTimeout(poll,2000)}).catch(function(){setTimeout(poll,4000)})})();
 <form method="post" action="/invites/create">
 <label>Person or PC name</label><input type="text" name="name" maxlength="60" required placeholder="e.g. Reception PC">
 <label>Tags for permanent access (comma-separated, optional)</label><input type="text" name="tags" placeholder="e.g. Office">
-<label><input type="checkbox" name="allow_setup" checked> Offer “allow help any time” (adds the PC to {{.Book}})</label>
+{{if .CanSetup}}<label><input type="checkbox" name="allow_setup" checked> Offer “allow help any time” (adds the PC to {{.Book}})</label>
+{{else}}<p class="muted">Your account creates one-time help invites only: the person clicks Accept for each session.</p>{{end}}
 <button class="btn" type="submit">Create invite link</button></form></div>
 <div class="card"><h2>Your invites</h2>
 {{if .Invites}}<table><tr><th>Name</th><th>Status</th><th>Expires</th><th></th></tr>
