@@ -396,7 +396,11 @@ func (s *Server) techCreate(w http.ResponseWriter, r *http.Request) {
 		inv, _ := s.Store.Get(token)
 		subject, body := s.inviteEmail(token, inv, pc)
 		if err := s.Mail.Send(to, subject, body); err != nil {
-			log.Printf("email invite for %q to %s: %v", name, to, err)
+			from := ""
+			if m, ok := s.Mail.(*mail.SMTP); ok {
+				from = " (sending as " + m.User + ")"
+			}
+			log.Printf("email invite for %q to %s%s: %v", name, to, from, err)
 			v.Error = "The invite was created, but the email could not be sent. Copy the link below and send it yourself."
 		} else {
 			_ = s.Store.Update(token, func(i *store.Invite) error { i.Email = to; return nil })
