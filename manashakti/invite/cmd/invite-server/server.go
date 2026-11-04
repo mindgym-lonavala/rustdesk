@@ -119,6 +119,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /invites/logout", s.sameOrigin(s.techLogout))
 	mux.HandleFunc("POST /invites/create", s.sameOrigin(s.limited(30, s.techCreate)))
 	mux.HandleFunc("POST /invites/revoke", s.sameOrigin(s.techRevoke))
+	mux.HandleFunc("GET /invites/download/{kind}", s.limited(10, s.techDownload))
 
 	mux.HandleFunc("GET /i/{token}", s.limited(30, s.landing))
 	mux.HandleFunc("GET /i/{token}/helper/{mode}", s.limited(10, s.helperDownload))
@@ -409,6 +410,22 @@ func (s *Server) techCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.renderTech(w, r, v)
+}
+
+// techDownload gives signed-in technicians the client for their own PC.
+func (s *Server) techDownload(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.currentSession(r); !ok {
+		http.Redirect(w, r, "/invites", http.StatusSeeOther)
+		return
+	}
+	switch r.PathValue("kind") {
+	case "msi":
+		s.serveFile(w, r, FileMSI, FileMSI)
+	case "portable":
+		s.serveFile(w, r, FilePortable, FilePortable)
+	default:
+		http.NotFound(w, r)
+	}
 }
 
 func (s *Server) techRevoke(w http.ResponseWriter, r *http.Request) {

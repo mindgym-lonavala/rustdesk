@@ -114,6 +114,11 @@ setTimeout(poll,2000)}).catch(function(){setTimeout(poll,4000)})})();
 {{if .CanSetup}}<label><input type="checkbox" name="allow_setup" checked> Offer “allow help any time” (adds the PC to {{.Book}})</label>
 {{else}}<p class="muted">Your account creates one-time help invites only: the person clicks Accept for each session.</p>{{end}}
 <button class="btn" type="submit">Create invite link</button></form></div>
+<div class="card"><h2>Downloads for technicians</h2>
+<p>Manashakti Support for your own PC. Install it with a double-click, then sign in (☰ Settings → Account → Login → Continue with Google).</p>
+<a class="btn small" href="/invites/download/msi">Installer (.msi)</a> &nbsp;
+<a class="btn small secondary" href="/invites/download/portable">Portable (.exe, no install)</a>
+<p class="muted">Do not run the unattended-access script on a technician PC.</p></div>
 <div class="card"><h2>Your invites</h2>
 {{if .Invites}}<table><tr><th>Name</th><th>Status</th><th>Expires</th><th></th></tr>
 {{range .Invites}}<tr><td>{{.Name}}{{if .Email}}<br><span class="muted">emailed to {{.Email}}</span>{{end}}{{if .AllowSetup}}<br><span class="muted">any-time offered</span>{{end}}</td><td>{{.Status}}</td><td>{{.Expires}}</td>

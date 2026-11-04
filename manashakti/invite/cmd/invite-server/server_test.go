@@ -451,3 +451,21 @@ func TestEmailInviteByComputerType(t *testing.T) {
 		t.Fatal("email field shown without SMTP")
 	}
 }
+
+func TestTechnicianDownloadsNeedSession(t *testing.T) {
+	_, _, h := newTestServer(t)
+	if w := req(h, "GET", "/invites/download/msi", "203.0.113.9", nil, nil, ""); w.Code != http.StatusSeeOther {
+		t.Fatalf("download without session: %d", w.Code)
+	}
+	c := login(t, h)
+	if !strings.Contains(req(h, "GET", "/invites", "192.168.50.5", nil, c, "").Body.String(), "/invites/download/msi") {
+		t.Fatal("download link missing")
+	}
+	w := req(h, "GET", "/invites/download/msi", "192.168.50.5", nil, c, "")
+	if w.Code != 200 || w.Body.String() != "binary:"+FileMSI || !strings.Contains(w.Header().Get("Content-Disposition"), FileMSI) {
+		t.Fatalf("msi: %d %q", w.Code, w.Header().Get("Content-Disposition"))
+	}
+	if w := req(h, "GET", "/invites/download/portable", "192.168.50.5", nil, c, ""); w.Body.String() != "binary:"+FilePortable {
+		t.Fatal("portable")
+	}
+}
