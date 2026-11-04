@@ -16,8 +16,8 @@ SERVER="support.manashakti.org"
 API="https://support.manashakti.org:8443"
 KEY="G1eThlVaDig57vVB3ZDgNH9e5Sa6yb795XHQ+YGp8o4="
 VERSION="1.5.1"
-DEB_SHA256="11e0af5f25e591358fa5190db96a808e14289dbe32b66e5cca8e230e28e8d479"
-RPM_SHA256="ec7c79e5020911b05b66a57219132aab62a894797ddd39619cb9bb3b61fb11ba"
+DEB_SHA256="b5d682ad90cb7571ecbdbf26eef58d3c4514e726a74ef6d08ce3f0b114ef0bd9"   # 1.5.1 build 69 (re-uploaded by RustDesk 2026-11-01)
+RPM_SHA256="089b95378e8e9a064d71577293d3eb04784f087e8213204da4d5464bcb9e0807"
 
 die() { echo "Error: $*" >&2; exit 1; }
 trap 'echo "Error: setup stopped unexpectedly at line $LINENO of $0" >&2' ERR
@@ -50,7 +50,7 @@ if [[ $(rustdesk --version 2>/dev/null || true) == "$VERSION" ]]; then
 else
     step "Downloading RustDesk $VERSION"
     curl -fsSL -o "$tmp/$pkg" "https://github.com/rustdesk/rustdesk/releases/download/$VERSION/$pkg"
-    echo "$sum  $tmp/$pkg" | sha256sum -c --quiet - || die "download checksum mismatch"
+    echo "$sum  $tmp/$pkg" | sha256sum -c --quiet - >/dev/null 2>&1 || die "the RustDesk package on GitHub is not the one this script was checked against (RustDesk may have re-uploaded it). Nothing was installed. Ask IT to update the checksum in install-linux.sh."
     step "Installing"
     if [[ $pkg == *.deb ]]; then
         if [[ -n $(dpkg --audit 2>/dev/null) ]]; then
