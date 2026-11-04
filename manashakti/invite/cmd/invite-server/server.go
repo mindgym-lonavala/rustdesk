@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mindgym-lonavala/rustdesk/manashakti/invite/internal/mail"
 	"github.com/mindgym-lonavala/rustdesk/manashakti/invite/internal/rdapi"
 	"github.com/mindgym-lonavala/rustdesk/manashakti/invite/internal/store"
 )
@@ -34,6 +35,7 @@ const (
 	FilePortable = "ManashaktiSupport.exe"
 	FileMSI      = "ManashaktiSupport.msi"
 	FileHelper   = "invite-helper.exe"
+	FileLinux    = "install-linux.sh"
 )
 
 var (
@@ -49,6 +51,10 @@ type API interface {
 	UpsertPeer(ctx context.Context, token, guid string, p rdapi.Peer) error
 	OidcBegin(ctx context.Context, op, id, uuid string) (string, string, error)
 	OidcQuery(ctx context.Context, code, id, uuid string) (string, string, error)
+}
+
+type Mailer interface {
+	Send(to, subject, body string) error
 }
 
 type session struct {
@@ -68,6 +74,8 @@ type Server struct {
 	// SetupUsers lists the technicians allowed to offer "allow help any time" (unattended
 	// access). Empty means every technician may. Others can create one-time help invites only.
 	SetupUsers map[string]bool
+	// Mail sends invite emails; nil disables the email field.
+	Mail Mailer
 
 	mu       sync.Mutex
 	sessions map[string]session
@@ -109,11 +117,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /invites/google", s.sameOrigin(s.limited(10, s.googleBegin)))
 	mux.HandleFunc("GET /invites/google/poll", s.limited(60, s.googlePoll))
 	mux.HandleFunc("POST /invites/logout", s.sameOrigin(s.techLogout))
-	mux.HandleFunc("POST /invites/create", s.sameOrigin(s.techCreate))
+	mux.HandleFunc("POST /invites/create", s.sameOrigin(s.limited(30, s.techCreate)))
 	mux.HandleFunc("POST /invites/revoke", s.sameOrigin(s.techRevoke))
 
 	mux.HandleFunc("GET /i/{token}", s.limited(30, s.landing))
 	mux.HandleFunc("GET /i/{token}/helper/{mode}", s.limited(10, s.helperDownload))
+	mux.HandleFunc("GET /i/{token}/linux", s.limited(10, s.linuxDownload))
 	mux.HandleFunc("GET /api/invite/{token}", s.limited(30, s.inviteInfo))
 	mux.HandleFunc("GET /api/invite/{token}/file/{kind}", s.limited(10, s.fileDownload))
 	mux.HandleFunc("POST /api/invite/{token}/enroll", s.limited(10, s.enroll))
@@ -236,7 +245,8 @@ func (s *Server) currentSession(r *http.Request) (session, bool) {
 
 type techView struct {
 	User, Name, Error, NewLink, NewName string
-	CanSetup                            bool
+	CanSetup, MailEnabled               bool
+	NewLinuxCmd, Sent                   string
 	Office, Google                      bool
 	GoogleURL                           string
 	Book                                string
@@ -244,8 +254,8 @@ type techView struct {
 }
 
 type inviteRow struct {
-	Key, Name, Status, Expires string
-	AllowSetup, Active         bool
+	Key, Name, Status, Expires, Email string
+	AllowSetup, Active                bool
 }
 
 func (s *Server) techPage(w http.ResponseWriter, r *http.Request) {
@@ -259,9 +269,10 @@ func (s *Server) renderTech(w http.ResponseWriter, r *http.Request, v techView) 
 	if ok {
 		v.User, v.Name = se.user, se.name
 		v.CanSetup = s.canSetup(se.user)
+		v.MailEnabled = s.Mail != nil
 		now := time.Now()
 		for _, inv := range s.Store.ListBy(se.user) {
-			row := inviteRow{Key: inv.Key, Name: inv.Name, AllowSetup: inv.AllowSetup, Expires: inv.ExpiresAt.Local().Format("02 Jan 15:04")}
+			row := inviteRow{Key: inv.Key, Name: inv.Name, Email: inv.Email, AllowSetup: inv.AllowSetup, Expires: inv.ExpiresAt.Local().Format("02 Jan 15:04")}
 			switch {
 			case inv.Revoked:
 				row.Status = "Revoked"
@@ -354,6 +365,22 @@ func (s *Server) techCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	allowSetup := r.FormValue("allow_setup") == "on" && s.canSetup(se.user)
+	pc := r.FormValue("pc") // windows, linux or unknown: decides the email instructions
+	var to string
+	if raw := strings.TrimSpace(r.FormValue("email")); raw != "" {
+		if s.Mail == nil {
+			s.renderTech(w, r, techView{Error: "Sending email is not set up on the server; leave the email empty and send the link yourself."})
+			return
+		}
+		if to, err = mail.ValidAddress(raw); err != nil {
+			s.renderTech(w, r, techView{Error: "That email address is not valid."})
+			return
+		}
+		if pc == "linux" && !allowSetup {
+			s.renderTech(w, r, techView{Error: "Linux PCs need “allow help any time” (one-time help is Windows only)."})
+			return
+		}
+	}
 	token, _, err := s.Store.Create(name, se.user, se.apiToken, allowSetup, tags, inviteTTL)
 	if err != nil {
 		log.Printf("create invite: %v", err)
@@ -361,7 +388,23 @@ func (s *Server) techCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("invite created by %s for %q (setup=%v)", se.user, name, allowSetup)
-	s.renderTech(w, r, techView{NewLink: s.PublicURL + "/i/" + token, NewName: name})
+	v := techView{NewLink: s.PublicURL + "/i/" + token, NewName: name}
+	if allowSetup {
+		v.NewLinuxCmd = s.linuxCommand(token)
+	}
+	if to != "" {
+		inv, _ := s.Store.Get(token)
+		subject, body := s.inviteEmail(token, inv, pc)
+		if err := s.Mail.Send(to, subject, body); err != nil {
+			log.Printf("email invite for %q to %s: %v", name, to, err)
+			v.Error = "The invite was created, but the email could not be sent. Copy the link below and send it yourself."
+		} else {
+			_ = s.Store.Update(token, func(i *store.Invite) error { i.Email = to; return nil })
+			log.Printf("invite for %q emailed to %s by %s", name, to, se.user)
+			v.Sent = to
+		}
+	}
+	s.renderTech(w, r, v)
 }
 
 func (s *Server) techRevoke(w http.ResponseWriter, r *http.Request) {
@@ -409,11 +452,62 @@ func (s *Server) landing(w http.ResponseWriter, r *http.Request) {
 	err := landingTmpl.Execute(w, map[string]any{
 		"Name": inv.Name, "By": inv.CreatedBy, "Token": token,
 		"AllowSetup": inv.AllowSetup && inv.SetupAt == nil,
+		"LinuxCmd":   s.linuxCommand(token),
 		"Expires":    inv.ExpiresAt.Local().Format("02 Jan 2006, 15:04"),
 	})
 	if err != nil {
 		log.Printf("render landing: %v", err)
 	}
+}
+
+// inviteEmail returns the subject and plain-text body for an emailed invite, with steps for
+// the kind of computer the technician chose (windows, linux, or unknown for both).
+func (s *Server) inviteEmail(token string, inv store.Invite, pc string) (string, string) {
+	link := s.PublicURL + "/i/" + token
+	setup := inv.AllowSetup && s.canSetup(inv.CreatedBy)
+	var b strings.Builder
+	fmt.Fprintf(&b, "Hello,\n\n%s from Manashakti IT has sent you a link to get remote help on your computer (%s).\n", inv.CreatedBy, inv.Name)
+	fmt.Fprintf(&b, "The link works until %s. Only continue if you asked Manashakti IT for help.\n\n", inv.ExpiresAt.Local().Format("02 Jan 2006, 15:04"))
+	if pc != "linux" {
+		b.WriteString("ON A WINDOWS PC\n")
+		fmt.Fprintf(&b, "1. Open this link: %s\n", link)
+		if setup {
+			b.WriteString("2. Click \"Get help now\" for help this time, or \"Allow help any time\" if IT asked you to.\n")
+		} else {
+			b.WriteString("2. Click \"Get help now\".\n")
+		}
+		b.WriteString("3. Open the downloaded file. If Windows shows \"Windows protected your PC\", click More info, then Run anyway.\n")
+		if setup {
+			b.WriteString("4. For \"Allow help any time\", click Yes when Windows asks to allow changes.\n")
+		}
+		b.WriteString("When your technician connects, click Accept in the Manashakti Support window.\n\n")
+	}
+	if pc != "windows" && setup {
+		b.WriteString("ON A LINUX PC (Ubuntu, Debian, Mint, Fedora)\n")
+		b.WriteString("Open a terminal, paste this one line and press Enter (it asks for your password):\n\n")
+		fmt.Fprintf(&b, "%s\n\n", s.linuxCommand(token))
+	}
+	b.WriteString("Questions? Reply to this email.\n\nManashakti IT Support\n")
+	return "Remote help from Manashakti IT: " + inv.Name, b.String()
+}
+
+// linuxCommand is what a Linux PC runs: fetch the setup script for this invite from our
+// server, then run it with the invite link.
+func (s *Server) linuxCommand(token string) string {
+	link := s.PublicURL + "/i/" + token
+	return fmt.Sprintf("curl -fsSL -o install-linux.sh '%s/linux' && sudo bash install-linux.sh '%s'", link, link)
+}
+
+func (s *Server) linuxDownload(w http.ResponseWriter, r *http.Request) {
+	_, inv, ok := s.lookup(w, r)
+	if !ok {
+		return
+	}
+	if !inv.AllowSetup || inv.SetupAt != nil || !s.canSetup(inv.CreatedBy) {
+		http.Error(w, "Permanent access is not offered by this invite.", http.StatusForbidden)
+		return
+	}
+	s.serveFile(w, r, FileLinux, FileLinux)
 }
 
 func (s *Server) helperDownload(w http.ResponseWriter, r *http.Request) {

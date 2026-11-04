@@ -37,6 +37,13 @@ var landingTmpl = template.Must(template.New("landing").Parse(`<!doctype html>
 <h2>Get help now and allow help any time</h2>
 <p>Installs Manashakti Support so IT can help this computer later without you being present. A small window shows whenever someone is connected. You can uninstall it at any time from Windows Settings → Apps.</p>
 <a class="btn secondary" href="/i/{{.Token}}/helper/setup">Allow help any time</a>
+<details><summary class="muted">On a Linux PC (Ubuntu, Debian, Mint, Fedora)?</summary>
+<p>Open a terminal and run this one line (it asks for your password for sudo):</p>
+<code id="linuxcmd">{{.LinuxCmd}}</code>
+<button class="btn small" type="button" onclick="navigator.clipboard.writeText(document.getElementById('linuxcmd').textContent);this.textContent='Copied'">Copy command</button>
+<p class="muted">Or <a href="/i/{{.Token}}/linux">download the setup script</a> and run it with this page's address:</p>
+<code>sudo bash install-linux.sh '&lt;this page's address&gt;'</code>
+</details>
 </div>
 {{end}}
 <div class="card">
@@ -84,21 +91,32 @@ setTimeout(poll,2000)}).catch(function(){setTimeout(poll,4000)})})();
 <form method="post" action="/invites/logout" style="display:inline"><button class="btn small secondary" type="submit">Sign out</button></form></p>
 {{if .NewLink}}
 <div class="card"><h2 class="ok">Invite for {{.NewName}} created</h2>
-<p>Send this link (valid 24 hours). It is shown only once.</p>
+{{if .Sent}}<p class="ok">Emailed to {{.Sent}}.</p>{{end}}
+<p>{{if .Sent}}The link (valid 24 hours), in case you also want to send it another way. It is shown only once.{{else}}Send this link (valid 24 hours). It is shown only once.{{end}}</p>
 <code id="link">{{.NewLink}}</code>
 <button class="btn small" type="button" onclick="navigator.clipboard.writeText(document.getElementById('link').textContent);this.textContent='Copied'">Copy link</button>
+{{if .NewLinuxCmd}}
+<p style="margin-top:16px"><strong>Linux PC:</strong> run this in a terminal on it (or send it with the link):</p>
+<code id="linuxcmd">{{.NewLinuxCmd}}</code>
+<button class="btn small" type="button" onclick="navigator.clipboard.writeText(document.getElementById('linuxcmd').textContent);this.textContent='Copied'">Copy Linux command</button>
+{{end}}
 </div>
 {{end}}
 <div class="card"><h2>New invite</h2>
 <form method="post" action="/invites/create">
 <label>Person or PC name</label><input type="text" name="name" maxlength="60" required placeholder="e.g. Reception PC">
+{{if .MailEnabled}}<label>Email it to (optional)</label><input type="text" name="email" maxlength="200" placeholder="name@example.org" autocomplete="off">
+<label>Their computer</label>
+<p><label><input type="radio" name="pc" value="windows" checked> Windows</label> &nbsp;
+<label><input type="radio" name="pc" value="linux"> Linux</label> &nbsp;
+<label><input type="radio" name="pc" value="unknown"> Not sure (send both)</label></p>{{end}}
 <label>Tags for permanent access (comma-separated, optional)</label><input type="text" name="tags" placeholder="e.g. Office">
 {{if .CanSetup}}<label><input type="checkbox" name="allow_setup" checked> Offer “allow help any time” (adds the PC to {{.Book}})</label>
 {{else}}<p class="muted">Your account creates one-time help invites only: the person clicks Accept for each session.</p>{{end}}
 <button class="btn" type="submit">Create invite link</button></form></div>
 <div class="card"><h2>Your invites</h2>
 {{if .Invites}}<table><tr><th>Name</th><th>Status</th><th>Expires</th><th></th></tr>
-{{range .Invites}}<tr><td>{{.Name}}{{if .AllowSetup}}<br><span class="muted">any-time offered</span>{{end}}</td><td>{{.Status}}</td><td>{{.Expires}}</td>
+{{range .Invites}}<tr><td>{{.Name}}{{if .Email}}<br><span class="muted">emailed to {{.Email}}</span>{{end}}{{if .AllowSetup}}<br><span class="muted">any-time offered</span>{{end}}</td><td>{{.Status}}</td><td>{{.Expires}}</td>
 <td>{{if .Active}}<form method="post" action="/invites/revoke"><input type="hidden" name="key" value="{{.Key}}"><button class="btn small secondary" type="submit">Cancel</button></form>{{end}}</td></tr>{{end}}
 </table>{{else}}<p class="muted">No invites yet.</p>{{end}}
 <p class="muted">PCs that accept an invite appear in the address book {{.Book}} in the app: “Invite: name” for one-time help, or the name itself for permanent access. Refresh the address book to see them.</p>

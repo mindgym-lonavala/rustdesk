@@ -33,6 +33,9 @@ Copy-Item (Join-Path $Source "invite-server.exe") $Dir -Force
 Copy-Item (Join-Path $Source "invite-helper.exe") "$Dir\files\invite-helper.exe" -Force
 Copy-Item $Portable "$Dir\files\ManashaktiSupport.exe" -Force
 Copy-Item $Msi "$Dir\files\ManashaktiSupport.msi" -Force
+# Linux setup script, served to "allow help any time" invites at /i/<code>/linux (byte-for-byte: keep LF endings).
+$linux = Join-Path $Source "install-linux.sh"
+if (Test-Path $linux) { Copy-Item $linux "$Dir\files\install-linux.sh" -Force }
 Get-ChildItem "$Dir\files" | Get-FileHash -Algorithm SHA256 | Format-Table @{n='File'; e={Split-Path $_.Path -Leaf}}, Hash -AutoSize
 
 # --- service ----------------------------------------------------------------------------

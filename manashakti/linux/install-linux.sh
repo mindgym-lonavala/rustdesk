@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Sets up a Linux PC for Manashakti Support (unattended access) using an invite link.
 #
-#   curl -fsSLO https://raw.githubusercontent.com/mindgym-lonavala/rustdesk/master/manashakti/linux/install-linux.sh
-#   sudo bash install-linux.sh 'https://support.manashakti.org:8443/i/<invite code>'
+# The invite page shows the exact command, which fetches this script from our server:
+#   curl -fsSL -o install-linux.sh 'https://support.manashakti.org:8443/i/<code>/linux' && sudo bash install-linux.sh 'https://support.manashakti.org:8443/i/<code>'
+# (Also available from GitHub: .../mindgym-lonavala/rustdesk/master/manashakti/linux/install-linux.sh)
 #
 # Create the invite on /invites with "Offer allow help any time" ticked. The script installs the
 # official RustDesk 1.5.1 package (checksum-verified), points it at the Manashakti server, sets a

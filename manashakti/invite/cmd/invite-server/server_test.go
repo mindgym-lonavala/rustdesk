@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"html"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -79,7 +81,7 @@ func newTestServer(t *testing.T) (*Server, *fakeAPI, http.Handler) {
 	}
 	files := filepath.Join(dir, "files")
 	os.MkdirAll(files, 0o700)
-	for _, n := range []string{FileHelper, FilePortable, FileMSI} {
+	for _, n := range []string{FileHelper, FilePortable, FileMSI, FileLinux} {
 		os.WriteFile(filepath.Join(files, n), []byte("binary:"+n), 0o600)
 	}
 	api := &fakeAPI{peers: map[string]rdapi.Peer{}}
@@ -367,5 +369,85 @@ func TestHelpOnlyTechnician(t *testing.T) {
 	}
 	if p := api.peers["222333444"]; p.Password != "" || p.Alias != "Invite: Visitor PC" {
 		t.Fatalf("peer %+v", p)
+	}
+}
+
+func TestLinuxCommandAndScript(t *testing.T) {
+	s, _, h := newTestServer(t)
+	c := login(t, h)
+	created := req(h, "POST", "/invites/create", "192.168.50.5", url.Values{"name": {"Lab"}, "allow_setup": {"on"}}, c, "")
+	m := regexp.MustCompile(regexp.QuoteMeta(public) + `/i/([A-Za-z0-9_-]{43})`).FindStringSubmatch(created.Body.String())
+	if m == nil {
+		t.Fatal("no link")
+	}
+	token := m[1]
+	want := s.linuxCommand(token)
+	if !strings.Contains(created.Body.String(), "Copy Linux command") || !strings.Contains(html.UnescapeString(created.Body.String()), want) {
+		t.Fatal("Linux command missing on the technician page")
+	}
+	land := req(h, "GET", "/i/"+token, "198.51.100.7", nil, nil, "")
+	if !strings.Contains(html.UnescapeString(land.Body.String()), want) {
+		t.Fatal("Linux command missing on the landing page")
+	}
+	dl := req(h, "GET", "/i/"+token+"/linux", "198.51.100.7", nil, nil, "")
+	if dl.Code != 200 || dl.Body.String() != "binary:"+FileLinux {
+		t.Fatalf("script download: %d", dl.Code)
+	}
+	help := createInvite(t, h, c, "Visitor", false)
+	if w := req(h, "GET", "/i/"+help+"/linux", "198.51.100.7", nil, nil, ""); w.Code != http.StatusForbidden {
+		t.Fatalf("script served for help-only invite: %d", w.Code)
+	}
+	if strings.Contains(req(h, "POST", "/invites/create", "192.168.50.5", url.Values{"name": {"V2"}}, c, "").Body.String(), "Copy Linux command") {
+		t.Fatal("Linux command shown for a help-only invite")
+	}
+}
+
+type fakeMail struct {
+	to, subject, body string
+	fail              error
+}
+
+func (m *fakeMail) Send(to, subject, body string) error {
+	m.to, m.subject, m.body = to, subject, body
+	return m.fail
+}
+
+func TestEmailInviteByComputerType(t *testing.T) {
+	s, _, h := newTestServer(t)
+	m := &fakeMail{}
+	s.Mail = m
+	c := login(t, h)
+	send := func(f url.Values) string {
+		f.Set("name", "Asha PC")
+		return req(h, "POST", "/invites/create", "192.168.50.5", f, c, "").Body.String()
+	}
+	page := send(url.Values{"email": {"asha@example.org"}, "pc": {"windows"}, "allow_setup": {"on"}})
+	if !strings.Contains(page, "Emailed to asha@example.org") || m.to != "asha@example.org" {
+		t.Fatalf("not sent: %q", m.to)
+	}
+	if !strings.Contains(m.body, "ON A WINDOWS PC") || strings.Contains(m.body, "LINUX") || !strings.Contains(m.body, public+"/i/") {
+		t.Fatalf("windows body:\n%s", m.body)
+	}
+	send(url.Values{"email": {"lab@example.org"}, "pc": {"linux"}, "allow_setup": {"on"}})
+	if strings.Contains(m.body, "WINDOWS") || !strings.Contains(m.body, "sudo bash install-linux.sh") {
+		t.Fatalf("linux body:\n%s", m.body)
+	}
+	send(url.Values{"email": {"x@example.org"}, "pc": {"unknown"}, "allow_setup": {"on"}})
+	if !strings.Contains(m.body, "WINDOWS") || !strings.Contains(m.body, "LINUX") {
+		t.Fatal("unknown should include both")
+	}
+	if p := send(url.Values{"email": {"a@b.org\r\nBcc: evil@x.org"}}); !strings.Contains(p, "not valid") {
+		t.Fatal("bad address accepted")
+	}
+	if p := send(url.Values{"email": {"l@example.org"}, "pc": {"linux"}}); !strings.Contains(p, "Linux PCs need") {
+		t.Fatal("linux help-only accepted")
+	}
+	m.fail = errors.New("smtp down")
+	if p := send(url.Values{"email": {"y@example.org"}}); !strings.Contains(p, "could not be sent") || !strings.Contains(p, `id="link"`) {
+		t.Fatal("send failure should still show the link")
+	}
+	s.Mail = nil
+	if p := req(h, "GET", "/invites", "192.168.50.5", nil, c, "").Body.String(); strings.Contains(p, `name="email"`) {
+		t.Fatal("email field shown without SMTP")
 	}
 }

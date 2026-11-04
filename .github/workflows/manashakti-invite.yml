@@ -5,7 +5,7 @@ name: Manashakti invite build
 on:
   push:
     branches: [master]
-    paths: ["manashakti/invite/**", ".github/workflows/manashakti-invite.yml"]
+    paths: ["manashakti/invite/**", "manashakti/linux/**", ".github/workflows/manashakti-invite.yml"]
   workflow_dispatch:
 
 permissions:
@@ -42,6 +42,7 @@ jobs:
           go build -trimpath -ldflags "-s -w" -o ../../out/invite-server.exe ./cmd/invite-server
           go build -trimpath -ldflags "-s -w -X main.baseURL=https://support.manashakti.org:8443" -o ../../out/invite-helper.exe ./cmd/invite-helper
           cp deploy/install-invite-server.ps1 ../../out/
+          cp ../linux/install-linux.sh ../../out/
           sha256sum ../../out/*
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         id: upload

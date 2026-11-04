@@ -29,6 +29,7 @@ type Invite struct {
 	CreatedBy  string    `json:"created_by"`
 	AllowSetup bool      `json:"allow_setup"`
 	Tags       []string  `json:"tags"`
+	Email      string    `json:"email,omitempty"` // where the invite was emailed, if it was
 	CreatedAt  time.Time `json:"created_at"`
 	ExpiresAt  time.Time `json:"expires_at"`
 	Revoked    bool      `json:"revoked"`
